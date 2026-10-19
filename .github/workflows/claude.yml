@@ -1,0 +1,134 @@
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      # Model tiers, cheapest first (North Mini Code was fastest in testing; Laguna stalled); each runs only if the one before it failed.
+      # Free models are rate-limited by OpenRouter, so a paid low-cost model is the backstop.
+      # CLAUDE_CODE_MAX_OUTPUT_TOKENS: Claude Code reserves this many output tokens per call;
+      # the default 64k made OpenRouter refuse (402) on a low balance. 32k fits every tier
+      # (Laguna S 2.1 maxes at 32,768) and reserves ~$0.006 on the DeepSeek backstop.
+      - name: Run Claude Code (free, North Mini Code)
+        id: primary
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: https://openrouter.ai/api
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"
+          ANTHROPIC_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_SMALL_FAST_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_SONNET_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_OPUS_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: cohere/north-mini-code:free
+        with:
+          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          allowed_bots: "crewly-app"
+          # No gh pr create: Crewly's GitHub App opens the PR on the agent's first push, so a
+          # fallback tier cannot open a second PR for the same issue.
+          claude_args: >-
+            --max-turns 40 --allowedTools Bash(go:*),Bash(gofmt:*)
+            --append-system-prompt "If the issue has an 'Approved acceptance flow' code block, first write that block byte for byte to the exact path the issue names. Never edit, reformat, rename or replace that file, and add no other files under crewly/flows/. Crewly checks its hash."
+
+      # If the tier before pushed a branch with commits, Crewly has opened (or will open) its
+      # PR. Starting over on a new branch would leave that work without a PR, so stop here.
+      - name: Check for an agent branch already pushed (after tier 1; a tier can "succeed" without pushing)
+        id: pushed_1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          pushed=false
+          for b in $(gh api "repos/$REPO/branches?per_page=100" --jq ".[].name" | grep -E "^claude/issue-${ISSUE}-" || true); do
+            ahead=$(gh api "repos/$REPO/compare/$BASE...$b" --jq .ahead_by || echo 0)
+            if [ "${ahead:-0}" -gt 0 ]; then pushed=true; echo "Found $b ($ahead commits ahead)"; fi
+          done
+          echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude Code (free fallback, Laguna S 2.1)
+        id: fallback_free
+        if: steps.pushed_1.outputs.pushed != 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: https://openrouter.ai/api
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"
+          ANTHROPIC_MODEL: poolside/laguna-s-2.1:free
+          ANTHROPIC_SMALL_FAST_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_SONNET_MODEL: poolside/laguna-s-2.1:free
+          ANTHROPIC_DEFAULT_OPUS_MODEL: poolside/laguna-s-2.1:free
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: cohere/north-mini-code:free
+        with:
+          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Crewly opens the issue as its GitHub App after a human approves the scope in the
+          # desk; the action refuses bot-opened events unless the bot is listed here.
+          allowed_bots: "crewly-app"
+          # No gh pr create: Crewly's GitHub App opens the PR on the agent's first push, so a
+          # fallback tier cannot open a second PR for the same issue.
+          claude_args: >-
+            --max-turns 40 --allowedTools Bash(go:*),Bash(gofmt:*)
+            --append-system-prompt "If the issue has an 'Approved acceptance flow' code block, first write that block byte for byte to the exact path the issue names. Never edit, reformat, rename or replace that file, and add no other files under crewly/flows/. Crewly checks its hash."
+
+      # If the tier before pushed a branch with commits, Crewly has opened (or will open) its
+      # PR. Starting over on a new branch would leave that work without a PR, so stop here.
+      - name: Check for an agent branch already pushed (after tier 2)
+        id: pushed_2
+        if: steps.fallback_free.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          pushed=false
+          for b in $(gh api "repos/$REPO/branches?per_page=100" --jq ".[].name" | grep -E "^claude/issue-${ISSUE}-" || true); do
+            ahead=$(gh api "repos/$REPO/compare/$BASE...$b" --jq .ahead_by || echo 0)
+            if [ "${ahead:-0}" -gt 0 ]; then pushed=true; echo "Found $b ($ahead commits ahead)"; fi
+          done
+          echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude Code (low-cost backstop, DeepSeek V4 Flash)
+        id: fallback_paid
+        if: steps.fallback_free.outcome != 'skipped' && steps.pushed_2.outputs.pushed != 'true'
+        timeout-minutes: 8
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: https://openrouter.ai/api
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"
+          ANTHROPIC_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_SMALL_FAST_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek/deepseek-v4-flash
+        with:
+          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          allowed_bots: "crewly-app"
+          # No gh pr create: Crewly's GitHub App opens the PR on the agent's first push, so a
+          # fallback tier cannot open a second PR for the same issue.
+          claude_args: >-
+            --max-turns 40 --allowedTools Bash(go:*),Bash(gofmt:*)
+            --append-system-prompt "If the issue has an 'Approved acceptance flow' code block, first write that block byte for byte to the exact path the issue names. Never edit, reformat, rename or replace that file, and add no other files under crewly/flows/. Crewly checks its hash."

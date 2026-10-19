@@ -1,3 +1,5 @@
+> Copy of https://github.com/gothinkster/golang-gin-realworld-example-app for Crewly receipt testing; original license applies.
+
 # ![RealWorld Example App](logo.png)
 
 

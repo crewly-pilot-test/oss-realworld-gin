@@ -1,0 +1,95 @@
+# Crewly Receipt: copy to .github/workflows/crewly-receipt.yml in the client
+# repository and merge it to the default branch BEFORE the first agent PR.
+#
+# It runs the approved acceptance flows (crewly/flows/*.spec.ts) against the
+# PR's preview deploy and uploads Playwright's JSON report as the
+# `crewly-receipt` artifact. Crewly pulls that artifact itself, through the
+# workflow_run webhook and the GitHub App's `actions: read` grant, so this
+# workflow needs no Crewly secret and cannot push results to Crewly.
+#
+# Crewly trusts a run's results only when:
+#   - the run is for the PR's exact head commit, from the PR's own repository;
+#   - the PR does not modify .github/workflows/ (a PR that edits this file,
+#     including the PR that first adds it, cannot certify itself);
+#   - the flow file matches the sha256 approved in Crewly.
+#
+# GitHub App setup (once): permissions `checks: write`, `actions: read` and
+# `pull_requests: write`; subscribe to the "Workflow run" and "Push" events. Changing permissions sends every
+# existing installation an approval request.
+#
+# The flows run in an empty folder with a freshly installed @playwright/test,
+# outside the repository, so repository config (.npmrc, tsconfig paths,
+# playwright.config, package overrides) cannot change how they run, and
+# --forbid-only stops a stray .only() from silently skipping the approved
+# flow. Approved flows must be self-contained: import only from @playwright/test.
+#
+# Flows read the preview URL from process.env.CREWLY_BASE_URL. Replace the
+# "Resolve preview URL" step with your host's wait-for-preview step (Vercel,
+# Netlify) so each PR is tested against ITS OWN preview; the receipt shows the
+# URL that was tested. With Vercel Deployment Protection, also pass its
+# automation bypass secret.
+name: Crewly Receipt
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  flows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find approved flows
+        id: flows
+        run: |
+          if ls crewly/flows/*.spec.ts >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.flows.outputs.present == 'true'
+        with:
+          node-version: 20
+
+      # No preview host: the flows test the PR's own app, started here from the PR head.
+      - uses: actions/setup-go@v5
+        if: steps.flows.outputs.present == 'true'
+        with:
+          go-version-file: go.mod
+
+      - name: Start this PR's app
+        if: steps.flows.outputs.present == 'true'
+        run: |
+          go build -o "$RUNNER_TEMP/app" .
+          PORT=8080 DB_PATH="$RUNNER_TEMP/app.db" nohup "$RUNNER_TEMP/app" > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:8080/api/ping/ && break; sleep 1; done
+          echo "CREWLY_BASE_URL=http://127.0.0.1:8080" >> "$GITHUB_ENV"
+
+      - name: Run approved flows in isolation
+        if: steps.flows.outputs.present == 'true'
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/crewly-receipt/results.json
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/crewly-receipt" "$RUNNER_TEMP/crewly"
+          node -e 'const fs=require("fs");fs.writeFileSync(process.argv[1],JSON.stringify({base_url:process.env.CREWLY_BASE_URL||"",head_sha:process.env.HEAD_SHA}))' "$GITHUB_WORKSPACE/crewly-receipt/crewly-meta.json"
+          cp crewly/flows/*.spec.ts "$RUNNER_TEMP/crewly/"
+          cd "$RUNNER_TEMP/crewly"
+          npm init -y >/dev/null
+          npm install --no-save --registry=https://registry.npmjs.org/ @playwright/test@1
+          npx playwright install --with-deps chromium
+          # One retry, so a test that only passes the second time is reported
+          # as flaky instead of passing.
+          npx playwright test --reporter=json --retries=1 --forbid-only
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.flows.outputs.present == 'true'
+        with:
+          name: crewly-receipt
+          path: crewly-receipt/
+          retention-days: 30
