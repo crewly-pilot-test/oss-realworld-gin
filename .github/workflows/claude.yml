@@ -45,6 +45,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           allowed_bots: "crewly-app"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # No gh pr create: Crewly's GitHub App opens the PR on the agent's first push, so a
           # fallback tier cannot open a second PR for the same issue.
           claude_args: >-
@@ -87,6 +88,7 @@ jobs:
           # Crewly opens the issue as its GitHub App after a human approves the scope in the
           # desk; the action refuses bot-opened events unless the bot is listed here.
           allowed_bots: "crewly-app"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # No gh pr create: Crewly's GitHub App opens the PR on the agent's first push, so a
           # fallback tier cannot open a second PR for the same issue.
           claude_args: >-
@@ -127,6 +129,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           allowed_bots: "crewly-app"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # No gh pr create: Crewly's GitHub App opens the PR on the agent's first push, so a
           # fallback tier cannot open a second PR for the same issue.
           claude_args: >-
