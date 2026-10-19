@@ -171,6 +171,17 @@ func getAllTags() ([]TagModel, error) {
 	db := common.GetDB()
 	var models []TagModel
 	err := db.Find(&models).Error
+	if err != nil {
+		return models, err
+	}
+	// Sort tags by name in ascending order
+	for i := 0; i < len(models)-1; i++ {
+		for j := i + 1; j < len(models); j++ {
+			if models[i].Tag > models[j].Tag {
+				models[i], models[j] = models[j], models[i]
+			}
+		}
+	}
 	return models, err
 }
 

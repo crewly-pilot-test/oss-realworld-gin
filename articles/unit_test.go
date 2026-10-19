@@ -2,10 +2,12 @@ package articles
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -1415,6 +1417,56 @@ func TestTagListSuccess(t *testing.T) {
 
 	asserts.Equal(http.StatusOK, w.Code, "Tags list should return 200")
 	asserts.Contains(w.Body.String(), `"tags"`, "Response should contain tags")
+}
+
+func TestTagListSorted(t *testing.T) {
+	asserts := assert.New(t)
+
+	r := setupRouter()
+
+	// Create test tags in non-alphabetical order: zeta-123, alpha-456, mid-789
+	tag1 := TagModel{Tag: "zeta-123"}
+	tag2 := TagModel{Tag: "alpha-456"}
+	tag3 := TagModel{Tag: "mid-789"}
+	test_db.Create(&tag1)
+	test_db.Create(&tag2)
+	test_db.Create(&tag3)
+
+	// Test list tags endpoint
+	req, _ := http.NewRequest("GET", "/api/tags", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	asserts.Equal(http.StatusOK, w.Code, "Tags list should return 200")
+	asserts.Contains(w.Body.String(), `"tags"`, "Response should contain tags")
+
+	// Parse the response to verify tags are sorted
+	var responseMap map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &responseMap)
+	asserts.NoError(err, "Should be able to parse JSON response")
+
+	// Extract tags from response
+	var tags []string
+	if tagsInterface, ok := responseMap["tags"]; ok {
+		if tagsSlice, ok := tagsInterface.([]interface{}); ok {
+			for _, tagInterface := range tagsSlice {
+				if tagString, ok := tagInterface.(string); ok {
+					tags = append(tags, tagString)
+				}
+			}
+		}
+	}
+
+	// Check if tags are in ascending order
+	for i := 0; i < len(tags)-1; i++ {
+		asserts.True(strings.Compare(tags[i], tags[i+1]) <= 0, "Tags should be sorted in ascending order")
+	}
+
+	// Verify all expected tags are present
+	expectedTags := []string{"alpha-456", "mid-789", "zeta-123"}
+	for _, expectedTag := range expectedTags {
+		asserts.Contains(tags, expectedTag, "Expected tag %s should be in response", expectedTag)
+	}
 }
 
 func TestArticleListErrorHandling(t *testing.T) {
