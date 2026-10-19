@@ -1,21 +1,31 @@
-// Playwright test for approved crewly flow
-// This test validates that the /api/tags endpoint returns tags in alphabetical order
-// As specified in issue #1: "Return popular tags in alphabetical order"
-
 import { test, expect } from '@playwright/test';
 
-test('tags are returned in alphabetical order', async ({ request }) => {
-  // Get tags from the API
-  const response = await request.get('/api/tags');
-  expect(response.status()).toBe(200);
+const base = process.env.CREWLY_BASE_URL!;
 
-  const responseBody = await response.json();
-  expect(responseBody).toHaveProperty('tags');
+test('popular tags come back in alphabetical order', async ({ request }) => {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const signup = await request.post(base + '/api/users', {
+    data: { user: { username: 'u' + id, email: id + '@example.test', password: 'password-' + id } },
+  });
+  expect(signup.status()).toBe(201);
+  const token = (await signup.json()).user.token;
 
-  const tags = responseBody.tags;
+  const created = await request.post(base + '/api/articles', {
+    headers: { Authorization: 'Token ' + token },
+    data: {
+      article: {
+        title: 'Tag order ' + id,
+        description: 'tags',
+        body: 'checking tag order',
+        tagList: ['zeta-' + id, 'alpha-' + id, 'mid-' + id],
+      },
+    },
+  });
+  expect(created.status()).toBe(201);
 
-  // Verify tags are in ascending alphabetical order
-  for (let i = 0; i < tags.length - 1; i++) {
-    expect(tags[i]).toBeLessThanOrEqual(tags[i + 1]);
-  }
+  const res = await request.get(base + '/api/tags');
+  expect(res.status()).toBe(200);
+  const tags: string[] = (await res.json()).tags;
+  expect(tags).toEqual(expect.arrayContaining(['alpha-' + id, 'mid-' + id, 'zeta-' + id]));
+  expect(tags).toEqual([...tags].sort());
 });
