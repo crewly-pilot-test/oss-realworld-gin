@@ -59,6 +59,12 @@ func main() {
 		})
 	})
 
+	v1.GET("/version", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"version": "1.0.0",
+		})
+	})
+
 	// Get port from environment variable or use default
 	port := os.Getenv("PORT")
 	if port == "" {
