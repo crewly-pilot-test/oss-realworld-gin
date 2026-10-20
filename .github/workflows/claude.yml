@@ -24,12 +24,13 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Model tiers, cheapest first (North Mini Code was fastest in testing; Laguna stalled); each runs only if the one before it failed.
-      # Free models are rate-limited by OpenRouter, so a paid low-cost model is the backstop.
+      # Model tiers: a paid low-cost model first (about $0.01 per small request), because the free
+      # models stalled, pushed nothing, or wrote their own test in testing; the free models are
+      # fallbacks. Each tier runs only if the one before it failed.
       # CLAUDE_CODE_MAX_OUTPUT_TOKENS: Claude Code reserves this many output tokens per call;
       # the default 64k made OpenRouter refuse (402) on a low balance. 32k fits every tier
-      # (Laguna S 2.1 maxes at 32,768) and reserves ~$0.006 on the DeepSeek backstop.
-      - name: Run Claude Code (free, North Mini Code)
+      # (Laguna S 2.1 maxes at 32,768) and reserves ~$0.006 on the DeepSeek tier.
+      - name: Run Claude Code (paid low-cost, DeepSeek V4 Flash)
         id: primary
         continue-on-error: true
         timeout-minutes: 8
@@ -37,11 +38,11 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://openrouter.ai/api
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"
-          ANTHROPIC_MODEL: cohere/north-mini-code:free
-          ANTHROPIC_SMALL_FAST_MODEL: cohere/north-mini-code:free
-          ANTHROPIC_DEFAULT_SONNET_MODEL: cohere/north-mini-code:free
-          ANTHROPIC_DEFAULT_OPUS_MODEL: cohere/north-mini-code:free
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_SMALL_FAST_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek/deepseek-v4-flash
         with:
           anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           allowed_bots: "crewly-app"
@@ -113,7 +114,7 @@ jobs:
           done
           echo "pushed=$pushed" >> "$GITHUB_OUTPUT"
 
-      - name: Run Claude Code (low-cost backstop, DeepSeek V4 Flash)
+      - name: Run Claude Code (free fallback, North Mini Code)
         id: fallback_paid
         if: steps.fallback_free.outcome != 'skipped' && steps.pushed_2.outputs.pushed != 'true'
         timeout-minutes: 8
@@ -121,11 +122,11 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://openrouter.ai/api
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"
-          ANTHROPIC_MODEL: deepseek/deepseek-v4-flash
-          ANTHROPIC_SMALL_FAST_MODEL: deepseek/deepseek-v4-flash
-          ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek/deepseek-v4-flash
-          ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek/deepseek-v4-flash
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek/deepseek-v4-flash
+          ANTHROPIC_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_SMALL_FAST_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_SONNET_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_OPUS_MODEL: cohere/north-mini-code:free
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: cohere/north-mini-code:free
         with:
           anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           allowed_bots: "crewly-app"
